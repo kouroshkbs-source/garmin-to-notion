@@ -1,6 +1,6 @@
-garminconnect>=0.2.19,<0.3
-garth==0.4.45
-withings-sync==4.2.4
+garminconnect==0.2.38
+garth==0.5.18
 notion-client==2.2.1
 pytz==2024.1
 lxml>=4.6.0,<5.0
+python-dotenv>=1.0.0
