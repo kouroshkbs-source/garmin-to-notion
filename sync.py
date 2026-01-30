@@ -341,7 +341,7 @@ def activity_exists_by_date_fallback(client, database_id, activity_date_gmt, act
                 {"property": "Date", "date": {"on_or_after": start_iso}},
                 {"property": "Date", "date": {"on_or_before": end_iso}},
                 {"property": "Activity Type", "select": {"equals": activity_type}},
-                {"property": "Activity", "title": {"equals": activity_name}}
+                {"property": "Activity Name", "title": {"equals": activity_name}}
             ]
         }
     )
@@ -400,7 +400,7 @@ def create_activity(client, database_id, activity):
     icon_url = ACTIVITY_ICONS.get(activity_subtype if activity_subtype != activity_type else activity_type)
     
     props = {
-        "Activity": {"title": [{"text": {"content": activity_name}}]},
+        "Activity Name": {"title": [{"text": {"content": activity_name}}]},
         "Date": {"date": {"start": activity_date_local}},
         "Activity Type": {"select": {"name": activity_type}},
         "Subactivity Type": {"select": {"name": activity_subtype}},
