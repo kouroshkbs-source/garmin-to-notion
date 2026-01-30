@@ -2,27 +2,42 @@ name: Sync Garmin to Notion
 
 on:
   schedule:
-    # This cron job will run every 15 minutes from 6 AM to 11 PM Eastern Time
-    # - cron: '*/10 10-23 * * *'  # Every 15 minutes from 10:00 to 23:45 UTC 
-    # - cron: '*/10 0-3 * * *'    # Every 15 minutes from 00:00 to 03:45 UTC
-    - cron: '0 1 * * *' # Daily
+    - cron: '0 1 * * *' # Daily at 1:00 UTC
   workflow_dispatch:
+    inputs:
+      sync_all:
+        description: 'Full sync (all history)'
+        required: false
+        default: 'false'
+        type: boolean
+      sync_days:
+        description: 'Days to sync (default: 7)'
+        required: false
+        default: '7'
+        type: string
+
 env:
-  TZ: 'America/Montreal'
+  TZ: 'Europe/Brussels'
+
+# Prevent concurrent runs (if one is stuck, cancel it)
+concurrency:
+  group: garmin-sync
+  cancel-in-progress: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # Safety: kill if stuck
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Cache pip packages
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -32,20 +47,36 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install -r requirements.txt
+          pip install -r requirements.txt --upgrade-strategy only-if-needed
 
-      - name: Run script
+      # TOKENSTORE: Restore OAuth tokens from secret (avoids fresh login)
+      - name: Restore Garmin tokenstore
         env:
+          GARMIN_TOKENSTORE_B64: ${{ secrets.GARMIN_TOKENSTORE_B64 }}
+        run: |
+          if [ -n "$GARMIN_TOKENSTORE_B64" ]; then
+            mkdir -p ~/.garminconnect
+            echo "$GARMIN_TOKENSTORE_B64" | base64 -d > ~/.garminconnect/tokens.json
+            echo "✅ Tokenstore restored to ~/.garminconnect/tokens.json"
+          else
+            echo "⚠️ GARMIN_TOKENSTORE_B64 not set, will use email/password fallback"
+          fi
+
+      - name: Run unified Garmin sync
+        env:
+          # Tokenstore path (preferred auth method)
+          GARMIN_TOKENSTORE_PATH: /home/runner/.garminconnect/tokens.json
+          # Fallback: email/password (used if tokenstore missing/invalid)
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          # Notion
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
           NOTION_PR_DB_ID: ${{ secrets.NOTION_PR_DB_ID }}
           NOTION_STEPS_DB_ID: ${{ secrets.NOTION_STEPS_DB_ID }}
           NOTION_SLEEP_DB_ID: ${{ secrets.NOTION_SLEEP_DB_ID }}
-          TZ: 'America/Montreal'
+          # Sync configuration
+          SYNC_DAYS: ${{ github.event.inputs.sync_days || '7' }}
+          SYNC_ALL: ${{ github.event.inputs.sync_all || 'false' }}
         run: |
-          python garmin-activities.py
-          python personal-records.py
-          python daily-steps.py
-          python sleep-data.py
+          python sync.py
