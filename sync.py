@@ -756,19 +756,20 @@ def sync_daily_steps(garmin, notion, database_id, sync_days, sync_all):
         date_str = current_date.isoformat()
         
         try:
+            # Get steps data from Garmin FIRST
+            steps_data = garmin.get_user_summary(date_str)
+            total_steps = steps_data.get("totalSteps") if steps_data else None
+            
+            # Skip if no valid steps data
+            if total_steps is None or total_steps == 0:
+                skipped += 1
+                continue
+            
             # Find existing Journal entry for this date
             query = notion.databases.query(
                 database_id=database_id,
                 filter={"property": "Date", "date": {"equals": date_str}}
             )
-            
-            # Get steps data from Garmin
-            steps_data = garmin.get_user_summary(date_str)
-            total_steps = steps_data.get("totalSteps", 0) if steps_data else 0
-            
-            if total_steps == 0:
-                skipped += 1
-                continue
             
             if query["results"]:
                 # Entry exists - check if Steps already filled
@@ -790,24 +791,16 @@ def sync_daily_steps(garmin, notion, database_id, sync_days, sync_all):
                 updated += 1
                 print(f"  UPDATED: {date_str} ({total_steps} steps)")
             else:
-                # No entry exists - create minimal one with just steps
-                notion.pages.create(
-                    parent={"database_id": database_id},
-                    properties={
-                        " ": {"title": [{"text": {"content": date_str}}]},
-                        "Date": {"date": {"start": date_str}},
-                        "Steps": {"number": total_steps}
-                    }
-                )
-                updated += 1
-                print(f"  CREATED: {date_str} ({total_steps} steps)")
+                # No entry for this date - skip (don't create incomplete entries)
+                print(f"  SKIP: {date_str} - no Journal entry exists")
+                skipped += 1
                 
         except Exception as e:
             errors += 1
             if "404" not in str(e):
                 print(f"  ERROR {date_str}: {e}")
     
-    print(f"\n✅ Daily Steps: {updated} updated/created, {skipped} skipped, {errors} errors")
+    print(f"\n✅ Daily Steps: {updated} updated, {skipped} skipped, {errors} errors")
     return updated, skipped, errors
 
 
@@ -840,13 +833,7 @@ def sync_sleep_data(garmin, notion, database_id, sync_days, sync_all):
         date_str = current_date.isoformat()
         
         try:
-            # Find existing Journal entry for this date
-            query = notion.databases.query(
-                database_id=database_id,
-                filter={"property": "Date", "date": {"equals": date_str}}
-            )
-            
-            # Get sleep data from Garmin
+            # Get sleep data from Garmin FIRST
             sleep_data = garmin.get_sleep_data(date_str)
             
             if not sleep_data or not sleep_data.get("dailySleepDTO"):
@@ -856,22 +843,32 @@ def sync_sleep_data(garmin, notion, database_id, sync_days, sync_all):
             daily = sleep_data.get("dailySleepDTO", {})
             
             # Calculate total sleep
-            deep = daily.get("deepSleepSeconds", 0) or 0
-            light = daily.get("lightSleepSeconds", 0) or 0
-            rem = daily.get("remSleepSeconds", 0) or 0
+            deep = daily.get("deepSleepSeconds") or 0
+            light = daily.get("lightSleepSeconds") or 0
+            rem = daily.get("remSleepSeconds") or 0
             total_seconds = deep + light + rem
             
             if total_seconds == 0:
                 skipped += 1
                 continue
             
-            # Get sleep score
-            sleep_score = daily.get("sleepScores", {}).get("overall", {}).get("value", 0)
+            # Get sleep score (try multiple locations)
+            sleep_score = None
+            if daily.get("sleepScores"):
+                sleep_score = daily.get("sleepScores", {}).get("overall", {}).get("value")
             if not sleep_score:
-                sleep_score = daily.get("sleepScore", 0) or 0
+                sleep_score = daily.get("sleepScore")
+            if not sleep_score:
+                sleep_score = 0
             
             # Format duration as text
             sleep_duration = format_duration(total_seconds)
+            
+            # Find existing Journal entry for this date
+            query = notion.databases.query(
+                database_id=database_id,
+                filter={"property": "Date", "date": {"equals": date_str}}
+            )
             
             if query["results"]:
                 # Entry exists - check if Sleep already filled
@@ -885,7 +882,7 @@ def sync_sleep_data(garmin, notion, database_id, sync_days, sync_all):
                 
                 # Update existing entry with sleep data
                 props = {}
-                if sleep_score > 0:
+                if sleep_score and sleep_score > 0:
                     props["Sleep score"] = {"number": sleep_score}
                 if sleep_duration:
                     props["Sleep duration"] = {"rich_text": [{"text": {"content": sleep_duration}}]}
@@ -900,25 +897,16 @@ def sync_sleep_data(garmin, notion, database_id, sync_days, sync_all):
                 else:
                     skipped += 1
             else:
-                # No entry exists - create minimal one with just sleep
-                notion.pages.create(
-                    parent={"database_id": database_id},
-                    properties={
-                        " ": {"title": [{"text": {"content": date_str}}]},
-                        "Date": {"date": {"start": date_str}},
-                        "Sleep score": {"number": sleep_score},
-                        "Sleep duration": {"rich_text": [{"text": {"content": sleep_duration}}]}
-                    }
-                )
-                updated += 1
-                print(f"  CREATED: {date_str} (score: {sleep_score}, {sleep_duration})")
+                # No entry for this date - skip (don't create incomplete entries)
+                print(f"  SKIP: {date_str} - no Journal entry exists")
+                skipped += 1
                 
         except Exception as e:
             errors += 1
             if "404" not in str(e):
                 print(f"  ERROR {date_str}: {e}")
     
-    print(f"\n✅ Sleep Data: {updated} updated/created, {skipped} skipped, {errors} errors")
+    print(f"\n✅ Sleep Data: {updated} updated, {skipped} skipped, {errors} errors")
     return updated, skipped, errors
 
 
